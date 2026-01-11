@@ -62,7 +62,7 @@ interface ILobbySearchQuery extends IPaginationParams {
 
 // --- CẤU HÌNH ---
 const server = Fastify({ logger: true });
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 10000;
 
 const PLAYERS_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vT2toeLa-uxkhYyHjI4vb4qdhN2EdGHAJAmdvdpCxpRvYQXuzxRgS7Fpm9nMqdNBvFL5ksm71-fmbz0/pub?gid=1551656749&output=csv";
@@ -304,6 +304,7 @@ const start = async () => {
     await server.listen({ port: PORT, host: "0.0.0.0" });
     console.log(`🚀 Server ready at http://localhost:${PORT}`);
   } catch (err) {
+    server.log.error(err);
     process.exit(1);
   }
 };
