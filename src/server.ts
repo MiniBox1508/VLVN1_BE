@@ -68,12 +68,15 @@ const PLAYERS_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vT2toeLa-uxkhYyHjI4vb4qdhN2EdGHAJAmdvdpCxpRvYQXuzxRgS7Fpm9nMqdNBvFL5ksm71-fmbz0/pub?gid=1551656749&output=csv";
 const LEADERBOARD_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vT2toeLa-uxkhYyHjI4vb4qdhN2EdGHAJAmdvdpCxpRvYQXuzxRgS7Fpm9nMqdNBvFL5ksm71-fmbz0/pub?gid=1043616930&output=csv";
+const LEADERBOARD2_SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vT2toeLa-uxkhYyHjI4vb4qdhN2EdGHAJAmdvdpCxpRvYQXuzxRgS7Fpm9nMqdNBvFL5ksm71-fmbz0/pub?gid=558218408&output=csv";
 const LOBBIES_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vT2toeLa-uxkhYyHjI4vb4qdhN2EdGHAJAmdvdpCxpRvYQXuzxRgS7Fpm9nMqdNBvFL5ksm71-fmbz0/pub?gid=791702275&output=csv";
 
 // --- CACHE ---
 let playersCache: Player[] = [];
 let leaderboardCache: LeaderboardEntry[] = [];
+let leaderboard2Cache: LeaderboardEntry[] = [];
 let lobbiesData: { day1: DayLobbies | null; day2: DayLobbies | null } = {
   day1: null,
   day2: null,
@@ -201,6 +204,69 @@ async function syncLeaderboardData() {
   }
 }
 
+async function syncLeaderboard2Data() {
+  try {
+    const response = await axios.get(LEADERBOARD2_SHEET_URL);
+    const parsed = Papa.parse(response.data, {
+      header: false,
+      skipEmptyLines: true,
+    });
+
+    const rows = parsed.data as string[][];
+    if (rows.length === 0) return;
+
+    // Tìm dòng tiêu đề chứa "Name"
+    let headerIndex = rows.findIndex((row) =>
+      row.some(
+        (cell) => cell && cell.toString().trim().toLowerCase() === "name"
+      )
+    );
+
+    if (headerIndex === -1) {
+      console.error("❌ Không tìm thấy tiêu đề trong Sheet Leaderboard 2");
+      return;
+    }
+
+    const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
+    const idx = {
+      pos: headerRow.indexOf("position"),
+      prize: headerRow.indexOf("prize"),
+      name: headerRow.indexOf("name"),
+      m1: headerRow.indexOf("m1"),
+      m2: headerRow.indexOf("m2"),
+      m3: headerRow.indexOf("m3"),
+      m4: headerRow.indexOf("m4"),
+      m5: headerRow.indexOf("m5"),
+      m6: headerRow.indexOf("m6"),
+      total: headerRow.indexOf("total"),
+      totalPoint: headerRow.indexOf("total point"),
+    };
+
+    leaderboard2Cache = rows
+      .slice(headerIndex + 1)
+      .filter((row) => row[idx.name] && row[idx.name]!.trim() !== "")
+      .map((row) => ({
+        position: row[idx.pos] || "",
+        prize: row[idx.prize] || "",
+        name: row[idx.name]!.trim(),
+        matches: [
+          Number(row[idx.m1]) || 0,
+          Number(row[idx.m2]) || 0,
+          Number(row[idx.m3]) || 0,
+          Number(row[idx.m4]) || 0,
+          Number(row[idx.m5]) || 0,
+          Number(row[idx.m6]) || 0,
+        ],
+        total: Number(row[idx.total]) || 0,
+        totalPoint: Number(row[idx.totalPoint]) || 0,
+      }));
+
+    console.log(`✅ Leaderboard 2: Đã tải ${leaderboard2Cache.length} người.`);
+  } catch (error) {
+    console.error("❌ Lỗi Leaderboard 2 Sync:", error);
+  }
+}
+
 async function syncLobbiesData() {
   try {
     const response = await axios.get(LOBBIES_SHEET_URL);
@@ -264,6 +330,7 @@ async function syncAllData() {
   await Promise.allSettled([
     syncPlayersData(),
     syncLeaderboardData(),
+    syncLeaderboard2Data(),
     syncLobbiesData(),
   ]);
   lastUpdated = new Date();
@@ -329,6 +396,32 @@ server.get("/api/lobbies/:day", async (request: any, reply) => {
       .status(404)
       .send({ success: false, message: "Không tìm thấy dữ liệu" });
   return { success: true, data: result };
+});
+
+// --- API ENDPOINTS CHO LEADERBOARD 2 ---
+
+// 1. List mặc định
+server.get("/api/leaderboard2", async (request) => {
+  const { page, limit } = request.query as any;
+  return { success: true, ...paginate(leaderboard2Cache, page, limit) };
+});
+
+// 2. Search cho Leaderboard 2
+server.get("/api/leaderboard2/search", async (request) => {
+  const { name, position, total, totalPoint, page, limit } =
+    request.query as ILeaderboardSearchQuery;
+  let data = leaderboard2Cache;
+
+  if (name)
+    data = data.filter((e) =>
+      e.name.toLowerCase().includes(name.toLowerCase())
+    );
+  if (position) data = data.filter((e) => e.position === position);
+  if (total) data = data.filter((e) => e.total === Number(total));
+  if (totalPoint)
+    data = data.filter((e) => e.totalPoint === Number(totalPoint));
+
+  return { success: true, ...paginate(data, page, limit) };
 });
 
 // 5. Lobbies Search (Có phân trang cho kết quả tìm kiếm phẳng)
