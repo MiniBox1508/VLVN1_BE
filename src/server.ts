@@ -40,7 +40,6 @@ export interface DayLobbies {
   rounds: Round[];
 }
 
-// Interface dùng chung cho phân trang
 interface IPaginationParams {
   page?: string;
   limit?: string;
@@ -51,6 +50,7 @@ interface ILeaderboardSearchQuery extends IPaginationParams {
   position?: string;
   total?: string;
   totalPoint?: string;
+  minPoint?: string; // Filter mới cho tìm kiếm nâng cao
 }
 
 interface ILobbySearchQuery extends IPaginationParams {
@@ -85,7 +85,7 @@ let lastUpdated = new Date();
 
 server.register(cors, { origin: "*" });
 
-// --- UTILS (Hàm bổ trợ phân trang) ---
+// --- UTILS ---
 const paginate = (
   data: any[],
   page: string | undefined,
@@ -105,6 +105,16 @@ const paginate = (
     },
     data: paginatedData,
   };
+};
+
+// --- LOGIC SẮP XẾP CHUNG ---
+const sortLeaderboard = (data: LeaderboardEntry[]) => {
+  return [...data].sort((a, b) => {
+    // Ưu tiên 1: Total Point (Điểm tổng sắp) cao hơn xếp trên
+    if (b.totalPoint !== a.totalPoint) return b.totalPoint - a.totalPoint;
+    // Ưu tiên 2: Total (Tổng điểm các trận) cao hơn xếp trên
+    return b.total - a.total;
+  });
 };
 
 // --- SERVICES ---
@@ -133,32 +143,18 @@ async function syncPlayersData() {
 async function syncLeaderboardData() {
   try {
     const response = await axios.get(LEADERBOARD_SHEET_URL);
-
-    // Bước 1: Parse thô (không lấy header tự động)
     const parsed = Papa.parse(response.data, {
-      header: false, // Lấy dạng mảng của mảng
+      header: false,
       skipEmptyLines: true,
     });
-
     const rows = parsed.data as string[][];
     if (rows.length === 0) return;
 
-    // Bước 2: Tìm dòng chứa tiêu đề "Name"
-    // Chúng ta duyệt qua các dòng đầu tiên để tìm dòng tiêu đề thực sự
     let headerIndex = rows.findIndex((row) =>
-      row.some(
-        (cell) => cell && cell.toString().trim().toLowerCase() === "name"
-      )
+      row.some((cell) => cell?.toString().trim().toLowerCase() === "name")
     );
+    if (headerIndex === -1) return;
 
-    if (headerIndex === -1) {
-      console.error(
-        "❌ Không tìm thấy dòng tiêu đề (Name, Position...) trong Sheet Leaderboard"
-      );
-      return;
-    }
-
-    // Bước 3: Xác định chỉ số (index) của từng cột
     const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
     const idx = {
       pos: headerRow.indexOf("position"),
@@ -174,10 +170,9 @@ async function syncLeaderboardData() {
       totalPoint: headerRow.indexOf("total point"),
     };
 
-    // Bước 4: Map dữ liệu từ các dòng sau dòng tiêu đề
-    leaderboardCache = rows
+    const rawData = rows
       .slice(headerIndex + 1)
-      .filter((row) => row[idx.name] && row[idx.name]!.trim() !== "") // Chỉ lấy dòng có tên
+      .filter((row) => row[idx.name]?.trim() !== "")
       .map((row) => ({
         position: row[idx.pos] || "",
         prize: row[idx.prize] || "",
@@ -194,10 +189,10 @@ async function syncLeaderboardData() {
         totalPoint: Number(row[idx.totalPoint]) || 0,
       }));
 
+    // Cập nhật Cache với logic Sắp xếp
+    leaderboardCache = sortLeaderboard(rawData);
     console.log(
-      `✅ Leaderboard: Đã tìm thấy tiêu đề tại dòng ${headerIndex + 1} và tải ${
-        leaderboardCache.length
-      } người.`
+      `✅ Leaderboard Day 1: Đã đồng bộ và sắp xếp ${leaderboardCache.length} kỳ thủ.`
     );
   } catch (error) {
     console.error("❌ Lỗi Leaderboard Sync:", error);
@@ -211,21 +206,13 @@ async function syncLeaderboard2Data() {
       header: false,
       skipEmptyLines: true,
     });
-
     const rows = parsed.data as string[][];
     if (rows.length === 0) return;
 
-    // Tìm dòng tiêu đề chứa "Name"
     let headerIndex = rows.findIndex((row) =>
-      row.some(
-        (cell) => cell && cell.toString().trim().toLowerCase() === "name"
-      )
+      row.some((cell) => cell?.toString().trim().toLowerCase() === "name")
     );
-
-    if (headerIndex === -1) {
-      console.error("❌ Không tìm thấy tiêu đề trong Sheet Leaderboard 2");
-      return;
-    }
+    if (headerIndex === -1) return;
 
     const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
     const idx = {
@@ -242,9 +229,9 @@ async function syncLeaderboard2Data() {
       totalPoint: headerRow.indexOf("total point"),
     };
 
-    leaderboard2Cache = rows
+    const rawData = rows
       .slice(headerIndex + 1)
-      .filter((row) => row[idx.name] && row[idx.name]!.trim() !== "")
+      .filter((row) => row[idx.name]?.trim() !== "")
       .map((row) => ({
         position: row[idx.pos] || "",
         prize: row[idx.prize] || "",
@@ -261,7 +248,11 @@ async function syncLeaderboard2Data() {
         totalPoint: Number(row[idx.totalPoint]) || 0,
       }));
 
-    console.log(`✅ Leaderboard 2: Đã tải ${leaderboard2Cache.length} người.`);
+    // Cập nhật Cache với logic Sắp xếp
+    leaderboard2Cache = sortLeaderboard(rawData);
+    console.log(
+      `✅ Leaderboard Day 2: Đã đồng bộ và sắp xếp ${leaderboard2Cache.length} kỳ thủ.`
+    );
   } catch (error) {
     console.error("❌ Lỗi Leaderboard 2 Sync:", error);
   }
@@ -276,51 +267,37 @@ async function syncLobbiesData() {
     });
     const rows = parsed.data as string[][];
 
-    // CẤU HÌNH THEO QUY LUẬT BẠN ĐÃ TÌM THẤY
     const CONFIG = {
-      PLAYER_START_ROW: 4, // Dòng bắt đầu VĐV đầu tiên
-      LOBBY_ROW_STEP: 9, // Khoảng cách giữa các Lobby (1 tiêu đề + 8 người)
-      ROUND_COL_STEP: 5, // Mỗi Round cách nhau 5 cột
-      DAY2_START_COL: 30, // Ngày 2 bắt đầu từ cột 30 (6 round x 5)
+      PLAYER_START_ROW: 4,
+      LOBBY_ROW_STEP: 9,
+      ROUND_COL_STEP: 5,
+      DAY2_START_COL: 30,
       TOTAL_ROUNDS: 6,
       TOTAL_LOBBIES: 8,
     };
 
     const parseDay = (startCol: number, dayNum: number): DayLobbies => {
       const rounds: Round[] = [];
-
       for (let r = 0; r < CONFIG.TOTAL_ROUNDS; r++) {
-        // Tính vị trí cột chính xác của Round dựa trên bước nhảy 5
         const colIndex = startCol + r * CONFIG.ROUND_COL_STEP;
         const lobbies: Lobby[] = [];
-
         for (let l = 0; l < CONFIG.TOTAL_LOBBIES; l++) {
           const playerStartRow =
             CONFIG.PLAYER_START_ROW + l * CONFIG.LOBBY_ROW_STEP;
           const members: LobbyMember[] = [];
-
           for (let m = 0; m < 8; m++) {
             const val = rows[playerStartRow + m]?.[colIndex]?.trim() || "";
             members.push({ name: val });
           }
-
-          lobbies.push({
-            lobbyName: `Lobby ${l + 1}`,
-            members,
-          });
+          lobbies.push({ lobbyName: `Lobby ${l + 1}`, members });
         }
         rounds.push({ roundNumber: r + 1, lobbies });
       }
       return { day: dayNum, rounds };
     };
 
-    // Thực hiện đồng bộ vào Cache
-    lobbiesData.day1 = parseDay(0, 1); // Day 1 bắt đầu từ cột 0
-    lobbiesData.day2 = parseDay(CONFIG.DAY2_START_COL, 2); // Day 2 bắt đầu từ cột 30
-
-    console.log(
-      `✅ Lobbies: Đã đồng bộ Day 1 & Day 2 (Bước nhảy 5 cột, Hàng ${CONFIG.PLAYER_START_ROW})`
-    );
+    lobbiesData.day1 = parseDay(0, 1);
+    lobbiesData.day2 = parseDay(CONFIG.DAY2_START_COL, 2);
   } catch (error) {
     console.error("❌ Lỗi Lobbies Sync:", error);
   }
@@ -334,21 +311,29 @@ async function syncAllData() {
     syncLobbiesData(),
   ]);
   lastUpdated = new Date();
-  console.log(
-    `✅ Toàn bộ dữ liệu đã được làm mới lúc: ${lastUpdated.toLocaleTimeString()}`
-  );
 }
 
 cron.schedule("*/30 * * * * *", async () => {
   await syncAllData();
 });
 
-// --- API ENDPOINTS HEALTHCHECK---
-server.get("/health", async () => ({ status: "ok" }));
-
 // --- API ENDPOINTS ---
 
-// 1. Players List & Search (Gộp chung logic phân trang)
+server.get("/health", async () => ({
+  status: "ok",
+  lastSync: lastUpdated.toLocaleString("vi-VN"),
+}));
+
+// --- API MỚI: TOP PERFORMERS (Vinh danh Top 3) ---
+server.get("/api/leaderboard/top-performers", async () => {
+  return {
+    success: true,
+    day1: leaderboardCache.slice(0, 3), // Top 3 Day 1
+    day2: leaderboard2Cache.slice(0, 3), // Top 3 Day 2
+    timestamp: lastUpdated.toLocaleString("vi-VN"),
+  };
+});
+
 server.get("/api/players", async (request) => {
   const { page, limit, q } = request.query as any;
   let data = playersCache;
@@ -356,106 +341,37 @@ server.get("/api/players", async (request) => {
     data = data.filter((p) =>
       p.summonerName.toLowerCase().includes(q.toLowerCase())
     );
-  return {
-    success: true,
-    lastUpdated: lastUpdated.toLocaleString("vi-VN"),
-    ...paginate(data, page, limit),
-  };
-});
-
-// 2. Leaderboard Search (Có phân trang)
-server.get("/api/leaderboard/search", async (request) => {
-  const { name, position, total, totalPoint, page, limit } =
-    request.query as ILeaderboardSearchQuery;
-  let data = leaderboardCache;
-
-  if (name)
-    data = data.filter((e) =>
-      e.name.toLowerCase().includes(name.toLowerCase())
-    );
-  if (position) data = data.filter((e) => e.position === position);
-  if (total) data = data.filter((e) => e.total === Number(total));
-  if (totalPoint)
-    data = data.filter((e) => e.totalPoint === Number(totalPoint));
-
   return { success: true, ...paginate(data, page, limit) };
 });
 
-// 3. Leaderboard List (Mặc định)
 server.get("/api/leaderboard", async (request) => {
   const { page, limit } = request.query as any;
   return { success: true, ...paginate(leaderboardCache, page, limit) };
 });
 
-// 4. Lobbies List theo ngày
-server.get("/api/lobbies/:day", async (request: any, reply) => {
-  const { day } = request.params;
-  const result = day === "1" ? lobbiesData.day1 : lobbiesData.day2;
-  if (!result)
-    return reply
-      .status(404)
-      .send({ success: false, message: "Không tìm thấy dữ liệu" });
-  return { success: true, data: result };
+server.get("/api/leaderboard/search", async (request) => {
+  const { name, minPoint, page, limit } =
+    request.query as ILeaderboardSearchQuery;
+  let data = leaderboardCache;
+  if (name)
+    data = data.filter((e) =>
+      e.name.toLowerCase().includes(name.toLowerCase())
+    );
+  if (minPoint) data = data.filter((e) => e.totalPoint >= Number(minPoint)); // Filter điểm tối thiểu
+  return { success: true, ...paginate(data, page, limit) };
 });
 
-// --- API ENDPOINTS CHO LEADERBOARD 2 ---
-
-// 1. List mặc định
 server.get("/api/leaderboard2", async (request) => {
   const { page, limit } = request.query as any;
   return { success: true, ...paginate(leaderboard2Cache, page, limit) };
 });
 
-// 2. Search cho Leaderboard 2
-server.get("/api/leaderboard2/search", async (request) => {
-  const { name, position, total, totalPoint, page, limit } =
-    request.query as ILeaderboardSearchQuery;
-  let data = leaderboard2Cache;
-
-  if (name)
-    data = data.filter((e) =>
-      e.name.toLowerCase().includes(name.toLowerCase())
-    );
-  if (position) data = data.filter((e) => e.position === position);
-  if (total) data = data.filter((e) => e.total === Number(total));
-  if (totalPoint)
-    data = data.filter((e) => e.totalPoint === Number(totalPoint));
-
-  return { success: true, ...paginate(data, page, limit) };
-});
-
-// 5. Lobbies Search (Có phân trang cho kết quả tìm kiếm phẳng)
-server.get("/api/lobbies/search", async (request) => {
-  const { day, round, lobby, name, page, limit } =
-    request.query as ILobbySearchQuery;
-  let daysToSearch =
-    day === "1"
-      ? [lobbiesData.day1]
-      : day === "2"
-      ? [lobbiesData.day2]
-      : [lobbiesData.day1, lobbiesData.day2];
-
-  const results: any[] = [];
-  daysToSearch.forEach((d) => {
-    d?.rounds.forEach((r) => {
-      if (round && r.roundNumber !== parseInt(round)) return;
-      r.lobbies.forEach((l) => {
-        if (lobby && !l.lobbyName.includes(lobby)) return;
-        l.members.forEach((m) => {
-          if (!name || m.name.toLowerCase().includes(name.toLowerCase())) {
-            results.push({
-              day: d.day,
-              round: r.roundNumber,
-              lobby: l.lobbyName,
-              player: m.name,
-            });
-          }
-        });
-      });
-    });
-  });
-
-  return { success: true, ...paginate(results, page, limit) };
+server.get("/api/lobbies/:day", async (request: any, reply) => {
+  const { day } = request.params;
+  const result = day === "1" ? lobbiesData.day1 : lobbiesData.day2;
+  if (!result)
+    return reply.status(404).send({ success: false, message: "Not found" });
+  return { success: true, data: result };
 });
 
 const start = async () => {
