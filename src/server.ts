@@ -45,12 +45,15 @@ interface IPaginationParams {
   limit?: string;
 }
 
+// Cập nhật Interface để hỗ trợ Sort
 interface ILeaderboardSearchQuery extends IPaginationParams {
   name?: string;
   position?: string;
   total?: string;
   totalPoint?: string;
-  minPoint?: string; // Filter mới cho tìm kiếm nâng cao
+  minPoint?: string;
+  sortBy?: "total" | "totalPoint"; // Trường cần xếp
+  order?: "asc" | "desc"; // Thứ tự
 }
 
 interface ILobbySearchQuery extends IPaginationParams {
@@ -85,16 +88,26 @@ let lastUpdated = new Date();
 
 server.register(cors, { origin: "*" });
 
-// --- UTILS ---
-const paginate = (
-  data: any[],
-  page: string | undefined,
-  limit: string | undefined
-) => {
-  const currentPage = parseInt(page || "1");
-  const pageSize = parseInt(limit || "10");
+// --- UTILS (CẬP NHẬT ĐỂ HỖ TRỢ SORT) ---
+const paginateAndSort = (data: any[], query: ILeaderboardSearchQuery) => {
+  const { page = "1", limit = "10", sortBy, order = "desc" } = query;
+
+  // Tạo bản sao để tránh làm hỏng cache mặc định
+  let processedData = [...data];
+
+  // Logic Sắp xếp linh hoạt
+  if (sortBy === "total" || sortBy === "totalPoint") {
+    processedData.sort((a, b) => {
+      const valA = a[sortBy];
+      const valB = b[sortBy];
+      return order === "asc" ? valA - valB : valB - valA;
+    });
+  }
+
+  const currentPage = parseInt(page);
+  const pageSize = parseInt(limit);
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedData = data.slice(startIndex, startIndex + pageSize);
+  const paginatedData = processedData.slice(startIndex, startIndex + pageSize);
 
   return {
     meta: {
@@ -107,12 +120,10 @@ const paginate = (
   };
 };
 
-// --- LOGIC SẮP XẾP CHUNG ---
-const sortLeaderboard = (data: LeaderboardEntry[]) => {
+// --- LOGIC SẮP XẾP MẶC ĐỊNH KHI SYNC ---
+const sortLeaderboardDefault = (data: LeaderboardEntry[]) => {
   return [...data].sort((a, b) => {
-    // Ưu tiên 1: Total Point (Điểm tổng sắp) cao hơn xếp trên
     if (b.totalPoint !== a.totalPoint) return b.totalPoint - a.totalPoint;
-    // Ưu tiên 2: Total (Tổng điểm các trận) cao hơn xếp trên
     return b.total - a.total;
   });
 };
@@ -149,12 +160,10 @@ async function syncLeaderboardData() {
     });
     const rows = parsed.data as string[][];
     if (rows.length === 0) return;
-
     let headerIndex = rows.findIndex((row) =>
       row.some((cell) => cell?.toString().trim().toLowerCase() === "name")
     );
     if (headerIndex === -1) return;
-
     const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
     const idx = {
       pos: headerRow.indexOf("position"),
@@ -169,7 +178,6 @@ async function syncLeaderboardData() {
       total: headerRow.indexOf("total"),
       totalPoint: headerRow.indexOf("total point"),
     };
-
     const rawData = rows
       .slice(headerIndex + 1)
       .filter((row) => row[idx.name]?.trim() !== "")
@@ -188,14 +196,9 @@ async function syncLeaderboardData() {
         total: Number(row[idx.total]) || 0,
         totalPoint: Number(row[idx.totalPoint]) || 0,
       }));
-
-    // Cập nhật Cache với logic Sắp xếp
-    leaderboardCache = sortLeaderboard(rawData);
-    console.log(
-      `✅ Leaderboard Day 1: Đã đồng bộ và sắp xếp ${leaderboardCache.length} kỳ thủ.`
-    );
+    leaderboardCache = sortLeaderboardDefault(rawData);
   } catch (error) {
-    console.error("❌ Lỗi Leaderboard Sync:", error);
+    console.error("❌ Lỗi Leaderboard Sync");
   }
 }
 
@@ -208,12 +211,10 @@ async function syncLeaderboard2Data() {
     });
     const rows = parsed.data as string[][];
     if (rows.length === 0) return;
-
     let headerIndex = rows.findIndex((row) =>
       row.some((cell) => cell?.toString().trim().toLowerCase() === "name")
     );
     if (headerIndex === -1) return;
-
     const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
     const idx = {
       pos: headerRow.indexOf("position"),
@@ -228,7 +229,6 @@ async function syncLeaderboard2Data() {
       total: headerRow.indexOf("total"),
       totalPoint: headerRow.indexOf("total point"),
     };
-
     const rawData = rows
       .slice(headerIndex + 1)
       .filter((row) => row[idx.name]?.trim() !== "")
@@ -247,14 +247,9 @@ async function syncLeaderboard2Data() {
         total: Number(row[idx.total]) || 0,
         totalPoint: Number(row[idx.totalPoint]) || 0,
       }));
-
-    // Cập nhật Cache với logic Sắp xếp
-    leaderboard2Cache = sortLeaderboard(rawData);
-    console.log(
-      `✅ Leaderboard Day 2: Đã đồng bộ và sắp xếp ${leaderboard2Cache.length} kỳ thủ.`
-    );
+    leaderboard2Cache = sortLeaderboardDefault(rawData);
   } catch (error) {
-    console.error("❌ Lỗi Leaderboard 2 Sync:", error);
+    console.error("❌ Lỗi Leaderboard 2 Sync");
   }
 }
 
@@ -266,7 +261,6 @@ async function syncLobbiesData() {
       skipEmptyLines: false,
     });
     const rows = parsed.data as string[][];
-
     const CONFIG = {
       PLAYER_START_ROW: 4,
       LOBBY_ROW_STEP: 9,
@@ -275,7 +269,6 @@ async function syncLobbiesData() {
       TOTAL_ROUNDS: 6,
       TOTAL_LOBBIES: 8,
     };
-
     const parseDay = (startCol: number, dayNum: number): DayLobbies => {
       const rounds: Round[] = [];
       for (let r = 0; r < CONFIG.TOTAL_ROUNDS; r++) {
@@ -295,11 +288,10 @@ async function syncLobbiesData() {
       }
       return { day: dayNum, rounds };
     };
-
     lobbiesData.day1 = parseDay(0, 1);
     lobbiesData.day2 = parseDay(CONFIG.DAY2_START_COL, 2);
   } catch (error) {
-    console.error("❌ Lỗi Lobbies Sync:", error);
+    console.error("❌ Lỗi Lobbies Sync");
   }
 }
 
@@ -313,57 +305,92 @@ async function syncAllData() {
   lastUpdated = new Date();
 }
 
-cron.schedule("*/30 * * * * *", async () => {
-  await syncAllData();
-});
+cron.schedule("*/30 * * * * *", syncAllData);
 
-// --- API ENDPOINTS ---
+// --- API ENDPOINTS (ĐÃ CẬP NHẬT GỌI HÀM SORT) ---
 
 server.get("/health", async () => ({
   status: "ok",
   lastSync: lastUpdated.toLocaleString("vi-VN"),
 }));
 
-// --- API MỚI: TOP PERFORMERS (Vinh danh Top 3) ---
 server.get("/api/leaderboard/top-performers", async () => {
   return {
     success: true,
-    day1: leaderboardCache.slice(0, 3), // Top 3 Day 1
-    day2: leaderboard2Cache.slice(0, 3), // Top 3 Day 2
+    day1: leaderboardCache.slice(0, 3),
+    day2: leaderboard2Cache.slice(0, 3),
     timestamp: lastUpdated.toLocaleString("vi-VN"),
   };
 });
 
 server.get("/api/players", async (request) => {
   const { page, limit, q } = request.query as any;
-  let data = playersCache;
-  if (q)
-    data = data.filter((p) =>
-      p.summonerName.toLowerCase().includes(q.toLowerCase())
-    );
-  return { success: true, ...paginate(data, page, limit) };
+  const data = q
+    ? playersCache.filter((p) =>
+        p.summonerName.toLowerCase().includes(q.toLowerCase())
+      )
+    : playersCache;
+  const currentPage = parseInt(page || "1");
+  const pageSize = parseInt(limit || "10");
+  const startIndex = (currentPage - 1) * pageSize;
+  return {
+    success: true,
+    meta: {
+      total: data.length,
+      currentPage,
+      pageSize,
+      totalPages: Math.ceil(data.length / pageSize),
+    },
+    data: data.slice(startIndex, startIndex + pageSize),
+  };
 });
 
+// Cập nhật API Leaderboard 1
 server.get("/api/leaderboard", async (request) => {
-  const { page, limit } = request.query as any;
-  return { success: true, ...paginate(leaderboardCache, page, limit) };
+  return {
+    success: true,
+    ...paginateAndSort(
+      leaderboardCache,
+      request.query as ILeaderboardSearchQuery
+    ),
+  };
 });
 
+// Cập nhật API Search 1
 server.get("/api/leaderboard/search", async (request) => {
-  const { name, minPoint, page, limit } =
-    request.query as ILeaderboardSearchQuery;
+  const query = request.query as ILeaderboardSearchQuery;
   let data = leaderboardCache;
-  if (name)
+  if (query.name)
     data = data.filter((e) =>
-      e.name.toLowerCase().includes(name.toLowerCase())
+      e.name.toLowerCase().includes(query.name!.toLowerCase())
     );
-  if (minPoint) data = data.filter((e) => e.totalPoint >= Number(minPoint)); // Filter điểm tối thiểu
-  return { success: true, ...paginate(data, page, limit) };
+  if (query.minPoint)
+    data = data.filter((e) => e.totalPoint >= Number(query.minPoint));
+  return { success: true, ...paginateAndSort(data, query) };
 });
 
+// Cập nhật API Leaderboard 2
 server.get("/api/leaderboard2", async (request) => {
-  const { page, limit } = request.query as any;
-  return { success: true, ...paginate(leaderboard2Cache, page, limit) };
+  return {
+    success: true,
+    ...paginateAndSort(
+      leaderboard2Cache,
+      request.query as ILeaderboardSearchQuery
+    ),
+  };
+});
+
+// Thêm API Search 2 (Để FE gọi đồng bộ)
+server.get("/api/leaderboard2/search", async (request) => {
+  const query = request.query as ILeaderboardSearchQuery;
+  let data = leaderboard2Cache;
+  if (query.name)
+    data = data.filter((e) =>
+      e.name.toLowerCase().includes(query.name!.toLowerCase())
+    );
+  if (query.minPoint)
+    data = data.filter((e) => e.totalPoint >= Number(query.minPoint));
+  return { success: true, ...paginateAndSort(data, query) };
 });
 
 server.get("/api/lobbies/:day", async (request: any, reply) => {
@@ -380,7 +407,6 @@ const start = async () => {
     await server.listen({ port: PORT, host: "0.0.0.0" });
     console.log(`🚀 Server ready at http://localhost:${PORT}`);
   } catch (err) {
-    server.log.error(err);
     process.exit(1);
   }
 };
