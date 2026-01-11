@@ -212,6 +212,9 @@ cron.schedule("*/30 * * * * *", async () => {
   await syncAllData();
 });
 
+// --- API ENDPOINTS HEALTHCHECK---
+server.get("/health", async () => ({ status: "ok" }));
+
 // --- API ENDPOINTS ---
 
 // 1. Players List & Search (Gộp chung logic phân trang)
