@@ -45,23 +45,59 @@ interface IPaginationParams {
   limit?: string;
 }
 
-// Cập nhật Interface để hỗ trợ Sort
 interface ILeaderboardSearchQuery extends IPaginationParams {
   name?: string;
   position?: string;
   total?: string;
   totalPoint?: string;
   minPoint?: string;
-  sortBy?: "total" | "totalPoint"; // Trường cần xếp
-  order?: "asc" | "desc"; // Thứ tự
+  sortBy?: "total" | "totalPoint";
+  order?: "asc" | "desc";
 }
 
-interface ILobbySearchQuery extends IPaginationParams {
-  day?: string;
-  round?: string;
-  lobby?: string;
-  name?: string;
-}
+// --- LOGIC TIE-BREAKERS CHUYÊN SÂU ---
+
+const comparePlayers = (
+  a: LeaderboardEntry,
+  b: LeaderboardEntry,
+  sortBy: "total" | "totalPoint" = "totalPoint"
+) => {
+  // 1. So sánh theo tiêu chí chính (Điểm Day hoặc Tổng điểm giải đấu)
+  const valA = a[sortBy];
+  const valB = b[sortBy];
+  if (valB !== valA) return valB - valA;
+
+  // Nếu bằng điểm, xét Ưu tiên phụ: Nếu đang sort 'total', ưu tiên 'totalPoint' và ngược lại
+  const secondaryKey = sortBy === "totalPoint" ? "total" : "totalPoint";
+  if (b[secondaryKey] !== a[secondaryKey])
+    return b[secondaryKey] - a[secondaryKey];
+
+  // 2. Tie-break: Số trận thắng (x2) + Số trận Top 4
+  const getScoreTB2 = (matches: number[]) => {
+    const wins = matches.filter((m) => m === 1).length;
+    const top4 = matches.filter((m) => m >= 1 && m <= 4).length;
+    return wins * 2 + top4;
+  };
+  const tb2A = getScoreTB2(a.matches);
+  const tb2B = getScoreTB2(b.matches);
+  if (tb2B !== tb2A) return tb2B - tb2A;
+
+  // 3. Tie-break: Số lượng các thứ hạng (Ưu tiên nhiều hạng 1, nếu bằng xét hạng 2...)
+  for (let rank = 1; rank <= 8; rank++) {
+    const countA = a.matches.filter((m) => m === rank).length;
+    const countB = b.matches.filter((m) => m === rank).length;
+    if (countB !== countA) return countB - countA;
+  }
+
+  // 4. Tie-break: Thứ hạng trận đấu cuối cùng (Thấp hơn là tốt hơn)
+  const getLastMatch = (matches: number[]) => {
+    const validMatches = matches.filter((m) => m > 0);
+    return validMatches.length > 0 ? validMatches[validMatches.length - 1] : 9;
+  };
+  const lastA = getLastMatch(a.matches);
+  const lastB = getLastMatch(b.matches);
+  return lastA - lastB;
+};
 
 // --- CẤU HÌNH ---
 const server = Fastify({ logger: true });
@@ -88,26 +124,32 @@ let lastUpdated = new Date();
 
 server.register(cors, { origin: "*" });
 
-// --- UTILS (CẬP NHẬT ĐỂ HỖ TRỢ SORT) ---
+// --- UTILS (CẬP NHẬT ĐỂ HỖ TRỢ SORT & DYNAMIC RANKING) ---
 const paginateAndSort = (data: any[], query: ILeaderboardSearchQuery) => {
-  const { page = "1", limit = "10", sortBy, order = "desc" } = query;
+  const {
+    page = "1",
+    limit = "10",
+    sortBy = "totalPoint",
+    order = "desc",
+  } = query;
 
-  // Tạo bản sao để tránh làm hỏng cache mặc định
   let processedData = [...data];
 
-  // Logic Sắp xếp linh hoạt
-  if (sortBy === "total" || sortBy === "totalPoint") {
-    processedData.sort((a, b) => {
-      const valA = a[sortBy];
-      const valB = b[sortBy];
-      return order === "asc" ? valA - valB : valB - valA;
-    });
-  }
+  // Sắp xếp linh hoạt kết hợp Tie-breakers
+  processedData.sort((a, b) => {
+    const result = comparePlayers(a, b, sortBy);
+    return order === "asc" ? -result : result;
+  });
+
+  // Gán lại position động dựa trên kết quả sắp xếp để tránh xung đột
+  const rankedData = processedData.map((item, index) => ({
+    ...item,
+    position: (index + 1).toString(),
+  }));
 
   const currentPage = parseInt(page);
   const pageSize = parseInt(limit);
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedData = processedData.slice(startIndex, startIndex + pageSize);
 
   return {
     meta: {
@@ -116,16 +158,17 @@ const paginateAndSort = (data: any[], query: ILeaderboardSearchQuery) => {
       pageSize,
       totalPages: Math.ceil(data.length / pageSize),
     },
-    data: paginatedData,
+    data: rankedData.slice(startIndex, startIndex + pageSize),
   };
 };
 
-// --- LOGIC SẮP XẾP MẶC ĐỊNH KHI SYNC ---
 const sortLeaderboardDefault = (data: LeaderboardEntry[]) => {
-  return [...data].sort((a, b) => {
-    if (b.totalPoint !== a.totalPoint) return b.totalPoint - a.totalPoint;
-    return b.total - a.total;
-  });
+  return [...data]
+    .sort((a, b) => comparePlayers(a, b, "totalPoint"))
+    .map((item, index) => ({
+      ...item,
+      position: (index + 1).toString(),
+    }));
 };
 
 // --- SERVICES ---
@@ -307,7 +350,7 @@ async function syncAllData() {
 
 cron.schedule("*/30 * * * * *", syncAllData);
 
-// --- API ENDPOINTS (ĐÃ CẬP NHẬT GỌI HÀM SORT) ---
+// --- API ENDPOINTS ---
 
 server.get("/health", async () => ({
   status: "ok",
@@ -345,7 +388,6 @@ server.get("/api/players", async (request) => {
   };
 });
 
-// Cập nhật API Leaderboard 1
 server.get("/api/leaderboard", async (request) => {
   return {
     success: true,
@@ -356,7 +398,6 @@ server.get("/api/leaderboard", async (request) => {
   };
 });
 
-// Cập nhật API Search 1
 server.get("/api/leaderboard/search", async (request) => {
   const query = request.query as ILeaderboardSearchQuery;
   let data = leaderboardCache;
@@ -369,7 +410,6 @@ server.get("/api/leaderboard/search", async (request) => {
   return { success: true, ...paginateAndSort(data, query) };
 });
 
-// Cập nhật API Leaderboard 2
 server.get("/api/leaderboard2", async (request) => {
   return {
     success: true,
@@ -380,7 +420,6 @@ server.get("/api/leaderboard2", async (request) => {
   };
 });
 
-// Thêm API Search 2 (Để FE gọi đồng bộ)
 server.get("/api/leaderboard2/search", async (request) => {
   const query = request.query as ILeaderboardSearchQuery;
   let data = leaderboard2Cache;
