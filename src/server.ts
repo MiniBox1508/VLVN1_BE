@@ -133,12 +133,23 @@ async function syncLeaderboardData() {
     const parsed = Papa.parse(response.data, {
       header: true,
       skipEmptyLines: true,
+      // Tự động xóa khoảng trắng ở đầu/cuối tên cột (ví dụ: "Name " -> "Name")
+      transformHeader: (header) => header.trim(),
     });
+
+    // Debug: Xem Render log để biết chính xác các Key mà PapaParse nhận được
+    if (parsed.data.length > 0) {
+      console.log("Headers nhận được:", Object.keys(parsed.data[0]));
+    }
+
     leaderboardCache = parsed.data
-      .filter((row: any) => row["Name"] && row["Name"].trim() !== "")
+      .filter((row: any) => {
+        // Chỉ lấy những dòng có Tên và Tên không được để trống
+        return row["Name"] && row["Name"].trim() !== "";
+      })
       .map((row: any) => ({
-        position: row["Position"],
-        prize: row["Prize"],
+        position: row["Position"] || "",
+        prize: row["Prize"] || "",
         name: row["Name"].trim(),
         matches: [
           Number(row["M1"]) || 0,
@@ -149,10 +160,15 @@ async function syncLeaderboardData() {
           Number(row["M6"]) || 0,
         ],
         total: Number(row["Total"]) || 0,
+        // Lưu ý: Key phải khớp chính xác "Total Point" (có khoảng trắng) như trong ảnh 147026
         totalPoint: Number(row["Total Point"]) || 0,
       }));
+
+    console.log(
+      `✅ Leaderboard: Đã cập nhật ${leaderboardCache.length} kỳ thủ.`
+    );
   } catch (error) {
-    console.error("❌ Lỗi Leaderboard Sync");
+    console.error("❌ Lỗi Leaderboard Sync:", error);
   }
 }
 
