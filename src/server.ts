@@ -130,42 +130,71 @@ async function syncPlayersData() {
 async function syncLeaderboardData() {
   try {
     const response = await axios.get(LEADERBOARD_SHEET_URL);
+
+    // Bước 1: Parse thô (không lấy header tự động)
     const parsed = Papa.parse(response.data, {
-      header: true,
+      header: false, // Lấy dạng mảng của mảng
       skipEmptyLines: true,
-      // Tự động xóa khoảng trắng ở đầu/cuối tên cột (ví dụ: "Name " -> "Name")
-      transformHeader: (header) => header.trim(),
     });
 
-    // Debug: Xem Render log để biết chính xác các Key mà PapaParse nhận được
-    if (parsed.data.length > 0) {
-      console.log("Headers nhận được:", Object.keys(parsed.data[0]));
+    const rows = parsed.data as string[][];
+    if (rows.length === 0) return;
+
+    // Bước 2: Tìm dòng chứa tiêu đề "Name"
+    // Chúng ta duyệt qua các dòng đầu tiên để tìm dòng tiêu đề thực sự
+    let headerIndex = rows.findIndex((row) =>
+      row.some(
+        (cell) => cell && cell.toString().trim().toLowerCase() === "name"
+      )
+    );
+
+    if (headerIndex === -1) {
+      console.error(
+        "❌ Không tìm thấy dòng tiêu đề (Name, Position...) trong Sheet Leaderboard"
+      );
+      return;
     }
 
-    leaderboardCache = parsed.data
-      .filter((row: any) => {
-        // Chỉ lấy những dòng có Tên và Tên không được để trống
-        return row["Name"] && row["Name"].trim() !== "";
-      })
-      .map((row: any) => ({
-        position: row["Position"] || "",
-        prize: row["Prize"] || "",
-        name: row["Name"].trim(),
+    // Bước 3: Xác định chỉ số (index) của từng cột
+    const headerRow = rows[headerIndex]!.map((h) => h.trim().toLowerCase());
+    const idx = {
+      pos: headerRow.indexOf("position"),
+      prize: headerRow.indexOf("prize"),
+      name: headerRow.indexOf("name"),
+      m1: headerRow.indexOf("m1"),
+      m2: headerRow.indexOf("m2"),
+      m3: headerRow.indexOf("m3"),
+      m4: headerRow.indexOf("m4"),
+      m5: headerRow.indexOf("m5"),
+      m6: headerRow.indexOf("m6"),
+      total: headerRow.indexOf("total"),
+      totalPoint: headerRow.indexOf("total point"),
+    };
+
+    // Bước 4: Map dữ liệu từ các dòng sau dòng tiêu đề
+    leaderboardCache = rows
+      .slice(headerIndex + 1)
+      .filter((row) => row[idx.name] && row[idx.name]!.trim() !== "") // Chỉ lấy dòng có tên
+      .map((row) => ({
+        position: row[idx.pos] || "",
+        prize: row[idx.prize] || "",
+        name: row[idx.name]!.trim(),
         matches: [
-          Number(row["M1"]) || 0,
-          Number(row["M2"]) || 0,
-          Number(row["M3"]) || 0,
-          Number(row["M4"]) || 0,
-          Number(row["M5"]) || 0,
-          Number(row["M6"]) || 0,
+          Number(row[idx.m1]) || 0,
+          Number(row[idx.m2]) || 0,
+          Number(row[idx.m3]) || 0,
+          Number(row[idx.m4]) || 0,
+          Number(row[idx.m5]) || 0,
+          Number(row[idx.m6]) || 0,
         ],
-        total: Number(row["Total"]) || 0,
-        // Lưu ý: Key phải khớp chính xác "Total Point" (có khoảng trắng) như trong ảnh 147026
-        totalPoint: Number(row["Total Point"]) || 0,
+        total: Number(row[idx.total]) || 0,
+        totalPoint: Number(row[idx.totalPoint]) || 0,
       }));
 
     console.log(
-      `✅ Leaderboard: Đã cập nhật ${leaderboardCache.length} kỳ thủ.`
+      `✅ Leaderboard: Đã tìm thấy tiêu đề tại dòng ${headerIndex + 1} và tải ${
+        leaderboardCache.length
+      } người.`
     );
   } catch (error) {
     console.error("❌ Lỗi Leaderboard Sync:", error);
