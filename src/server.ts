@@ -210,34 +210,53 @@ async function syncLobbiesData() {
     });
     const rows = parsed.data as string[][];
 
-    const parseDay = (
-      startCol: number,
-      lobbyCount: number,
-      dayNum: number
-    ): DayLobbies => {
+    // CẤU HÌNH THEO QUY LUẬT BẠN ĐÃ TÌM THẤY
+    const CONFIG = {
+      PLAYER_START_ROW: 4, // Dòng bắt đầu VĐV đầu tiên
+      LOBBY_ROW_STEP: 9, // Khoảng cách giữa các Lobby (1 tiêu đề + 8 người)
+      ROUND_COL_STEP: 5, // Mỗi Round cách nhau 5 cột
+      DAY2_START_COL: 30, // Ngày 2 bắt đầu từ cột 30 (6 round x 5)
+      TOTAL_ROUNDS: 6,
+      TOTAL_LOBBIES: 8,
+    };
+
+    const parseDay = (startCol: number, dayNum: number): DayLobbies => {
       const rounds: Round[] = [];
-      for (let r = 0; r < 6; r++) {
-        const colIndex = startCol + r;
+
+      for (let r = 0; r < CONFIG.TOTAL_ROUNDS; r++) {
+        // Tính vị trí cột chính xác của Round dựa trên bước nhảy 5
+        const colIndex = startCol + r * CONFIG.ROUND_COL_STEP;
         const lobbies: Lobby[] = [];
-        for (let l = 0; l < lobbyCount; l++) {
-          const startRow = 1 + l * 9;
+
+        for (let l = 0; l < CONFIG.TOTAL_LOBBIES; l++) {
+          const playerStartRow =
+            CONFIG.PLAYER_START_ROW + l * CONFIG.LOBBY_ROW_STEP;
           const members: LobbyMember[] = [];
+
           for (let m = 0; m < 8; m++) {
-            members.push({
-              name: rows[startRow + m]?.[colIndex]?.trim() || "",
-            });
+            const val = rows[playerStartRow + m]?.[colIndex]?.trim() || "";
+            members.push({ name: val });
           }
-          lobbies.push({ lobbyName: `Lobby ${l + 1}`, members });
+
+          lobbies.push({
+            lobbyName: `Lobby ${l + 1}`,
+            members,
+          });
         }
         rounds.push({ roundNumber: r + 1, lobbies });
       }
       return { day: dayNum, rounds };
     };
 
-    lobbiesData.day1 = parseDay(0, 8, 1);
-    lobbiesData.day2 = parseDay(6, 5, 2);
+    // Thực hiện đồng bộ vào Cache
+    lobbiesData.day1 = parseDay(0, 1); // Day 1 bắt đầu từ cột 0
+    lobbiesData.day2 = parseDay(CONFIG.DAY2_START_COL, 2); // Day 2 bắt đầu từ cột 30
+
+    console.log(
+      `✅ Lobbies: Đã đồng bộ Day 1 & Day 2 (Bước nhảy 5 cột, Hàng ${CONFIG.PLAYER_START_ROW})`
+    );
   } catch (error) {
-    console.error("❌ Lỗi Lobbies Sync");
+    console.error("❌ Lỗi Lobbies Sync:", error);
   }
 }
 
